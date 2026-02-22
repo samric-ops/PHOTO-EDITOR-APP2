@@ -6,7 +6,8 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 streamlit run app.py
 
-## Deploy to Streamlit Cloud
+## Deploy to Streamlit Community Cloud
 - Push to GitHub
 - New app → select repo → main file: `app.py`
-- First run may take longer (models auto-download)
+- After first build, if imports fail, use **Manage app → Reboot**.
+- If necessary: **Settings → Advanced → Clear cache**, then Reboot.
