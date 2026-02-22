@@ -1,29 +1,42 @@
 import io
 import os
 from pathlib import Path
+from typing import Optional
 
 import streamlit as st
 from PIL import Image
 import numpy as np
 
-# ============================================================
-# WALANG top-level `import cv2` dito. Gumamit tayo ng lazy import.
-# ============================================================
+# ------------------------------------------------------------
+# Do NOT import cv2 at top-level. We'll import it lazily.
+# ------------------------------------------------------------
 
-def lazy_cv2():
-    import cv2
-    return cv2
+def get_cv2():
+    """Import cv2 only when needed. If it fails, show a clear UI message and stop."""
+    try:
+        import cv2
+        return cv2
+    except Exception as e:
+        st.error(
+            "OpenCV (`cv2`) failed to import in this environment.\n\n"
+            "Please ensure the repository has **runtime.txt = 3.11** and "
+            "**requirements.txt** includes only "
+            "`opencv-python-headless==4.8.1.78`. After pushing, use **Manage app → Reboot** "
+            "and if needed **Settings → Advanced → Clear cache** in Streamlit Cloud.\n\n"
+            f"Technical detail: {repr(e)}"
+        )
+        st.stop()
 
 def pil_to_bgr(img: Image.Image) -> np.ndarray:
-    cv2 = lazy_cv2()
+    cv2 = get_cv2()
     return cv2.cvtColor(np.array(img.convert("RGB")), cv2.COLOR_RGB2BGR)
 
 def bgr_to_pil(img: np.ndarray) -> Image.Image:
-    cv2 = lazy_cv2()
+    cv2 = get_cv2()
     return Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
 
-def apply_tone(img_bgr: np.ndarray, brightness=0, contrast=0, saturation=0):
-    cv2 = lazy_cv2()
+def apply_tone(img_bgr: np.ndarray, brightness=0, contrast=0, saturation=0) -> np.ndarray:
+    cv2 = get_cv2()
     c = np.clip(contrast, -100, 100)
     b = np.clip(brightness, -100, 100)
     alpha = 1 + (c / 100.0)
@@ -35,30 +48,35 @@ def apply_tone(img_bgr: np.ndarray, brightness=0, contrast=0, saturation=0):
         out = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
     return out
 
-def smooth_background(img_bgr: np.ndarray, strength=10):
-    cv2 = lazy_cv2()
+def smooth_background(img_bgr: np.ndarray, strength=10) -> np.ndarray:
+    cv2 = get_cv2()
     s = max(5, int(strength))
     return cv2.bilateralFilter(img_bgr, d=9, sigmaColor=s*3, sigmaSpace=s)
 
 @st.cache_resource(show_spinner="Loading enhancement models…")
 def load_models():
-    # I‑import ang heavy deps sa loob para iwas early import failures
+    """
+    Loads GFPGAN + Real-ESRGAN. We use Real-ESRGAN x4 as the background upsampler.
+    Heavy deps are imported here so the UI can load even if builds are slow.
+    """
     from gfpgan import GFPGANer
     from realesrgan import RealESRGANer
 
     cache_dir = Path.home() / ".cache" / "ai-photo-enhancer"
     os.makedirs(cache_dir, exist_ok=True)
 
+    # Real-ESRGAN model (x4plus) – robust general-purpose SR
     sr_upsampler = RealESRGANer(
         scale=4,
-        model_path=None,      # auto-download
+        model_path=None,              # auto-download
         model="RealESRGAN_x4plus",
         tile=200, tile_pad=10, pre_pad=0,
-        half=True
+        half=True                     # FP16 if supported
     )
 
+    # GFPGAN face restoration, using the same SR for background
     face_enhancer = GFPGANer(
-        model_path=None,      # auto-download
+        model_path=None,              # auto-download
         upscale=4,
         arch="clean",
         channel_multiplier=2,
@@ -71,12 +89,12 @@ def enhance_image(
     upscale: int = 2,
     sr_denoise_strength: float = 0.5,
     bg_smooth_strength: int = 10,
-    tone: dict | None = None
+    tone: Optional[dict] = None
 ) -> np.ndarray:
-    cv2 = lazy_cv2()
+    cv2 = get_cv2()
     face_enhancer, _ = load_models()
 
-    # Conservative pre-denoise
+    # Conservative pre-denoise to help SR/restoration
     if sr_denoise_strength > 0:
         img_bgr = cv2.fastNlMeansDenoisingColored(
             img_bgr, None,
@@ -94,7 +112,7 @@ def enhance_image(
     )
     out = restored
 
-    # Downscale to 2× if user selected 2× (GFPGAN returns ~4×)
+    # GFPGAN returns ~4×. Downscale if user selected 2×.
     if upscale == 2:
         h, w = out.shape[:2]
         out = cv2.resize(out, (w // 2, h // 2), interpolation=cv2.INTER_CUBIC)
@@ -131,7 +149,11 @@ with st.sidebar:
     saturation = st.slider("Saturation", -30, 30, 6)
     st.caption("Tip: Small positive contrast and saturation add clean, natural pop.")
 
-uploaded = st.file_uploader("Upload a JPG/PNG", type=["jpg", "jpeg", "png"], accept_multiple_files=False)
+uploaded = st.file_uploader(
+    "Upload a JPG/PNG",
+    type=["jpg", "jpeg", "png"],
+    accept_multiple_files=False
+)
 
 if not uploaded:
     st.info("Upload an image to start.")
