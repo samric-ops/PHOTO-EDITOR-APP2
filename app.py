@@ -1,144 +1,106 @@
 import io
 import os
-from pathlib import Path
-from typing import Optional
-
 import streamlit as st
 from PIL import Image
 import numpy as np
 
-# --- lazy import for cv2 ---
+# --- Helper Functions ---
 def get_cv2():
     try:
         import cv2
         return cv2
     except Exception as e:
-        st.error(
-            "OpenCV (`cv2`) failed to import.\n\n"
-            "**Fix:** Ensure you have a `packages.txt` file in your repo with `libgl1` and `libglib2.0-0` inside it. "
-            "Then, go to **Manage app → Reboot** in Streamlit Cloud.\n\n"
-            f"Technical detail: {repr(e)}"
-        )
+        st.error(f"OpenCV failed to load. Technical detail: {repr(e)}")
         st.stop()
 
-def pil_to_np(img: Image.Image) -> np.ndarray:
-    return np.array(img.convert("RGB"))
-
-def apply_tone_pil(img: Image.Image, brightness=0, contrast=0, saturation=0) -> Image.Image:
-    from PIL import ImageEnhance
-    out = img
-    if brightness != 0:
-        out = ImageEnhance.Brightness(out).enhance(1 + brightness / 100.0)
-    if contrast != 0:
-        out = ImageEnhance.Contrast(out).enhance(1 + contrast / 100.0)
-    if saturation != 0:
-        out = ImageEnhance.Color(out).enhance(1 + saturation / 100.0)
-    return out
-
-def smooth_background_np(img_np: np.ndarray, strength=10) -> np.ndarray:
-    cv2 = get_cv2()
-    s = max(5, int(strength))
-    return cv2.bilateralFilter(img_np, d=9, sigmaColor=s*3, sigmaSpace=s)
-
-@st.cache_resource(show_spinner="Loading enhancement models...")
+@st.cache_resource(show_spinner="Loading AI Models... (This takes a moment)")
 def load_models():
     from gfpgan import GFPGANer
     from realesrgan import RealESRGANer
 
-    # Model initialization
+    # Initialize RealESRGAN (Background Upsampler)
+    # tile=100 is used to save RAM on Streamlit Cloud
     sr_upsampler = RealESRGANer(
         scale=4,
         model_path=None,
         model="RealESRGAN_x4plus",
-        tile=200, tile_pad=10, pre_pad=0,
-        half=True
+        tile=100, 
+        tile_pad=10, 
+        pre_pad=0,
+        half=False, # CPUs don't support half-precision (FP16)
+        device='cpu'
     )
 
+    # Initialize GFPGAN (Face Restorer)
     face_enhancer = GFPGANer(
         model_path=None,
-        upscale=4,
+        upscale=2,
         arch="clean",
         channel_multiplier=2,
-        bg_upsampler=sr_upsampler
+        bg_upsampler=sr_upsampler,
+        device='cpu'
     )
-    return face_enhancer, sr_upsampler
+    return face_enhancer
 
-def enhance_image(
-    img_np: np.ndarray,
-    upscale: int = 2,
-    denoise_strength: float = 0.5,
-    bg_smooth_strength: int = 10,
-    tone: Optional[dict] = None
-) -> np.ndarray:
+def process_image(img_np, upscale_factor, denoise_strength, face_enhancer):
     cv2 = get_cv2()
-    face_enhancer, _ = load_models()
-
+    
+    # Optional Denoising
     if denoise_strength > 0:
-        img_np = cv2.fastNlMeansDenoisingColored(
-            img_np, None,
-            5 + int(denoise_strength * 5),
-            5 + int(denoise_strength * 5),
-            7, 21
-        )
+        h = int(denoise_strength * 10)
+        img_np = cv2.fastNlMeansDenoisingColored(img_np, None, h, h, 7, 21)
 
-    _, _, restored = face_enhancer.enhance(
+    # Enhance Face and Background
+    _, _, restored_img = face_enhancer.enhance(
         img_np,
         has_aligned=False,
         only_center_face=False,
         paste_back=True
     )
-    out = restored
+    
+    return restored_img
 
-    if upscale == 2:
-        h, w = out.shape[:2]
-        out = cv2.resize(out, (w // 2, h // 2), interpolation=cv2.INTER_CUBIC)
-
-    if bg_smooth_strength > 0:
-        out = smooth_background_np(out, strength=bg_smooth_strength)
-
-    out_pil = apply_tone_pil(
-        Image.fromarray(out),
-        brightness=tone.get("brightness", 0) if tone else 0,
-        contrast=tone.get("contrast", 8) if tone else 0,
-        saturation=tone.get("saturation", 6) if tone else 0
-    )
-    return np.array(out_pil)
-
-# --- UI ---
-st.set_page_config(page_title="AI Photo Enhancer", page_icon="✨", layout="centered")
+# --- UI Layout ---
+st.set_page_config(page_title="AI Photo Enhancer", page_icon="✨")
 st.title("✨ AI Photo Enhancer")
+st.markdown("Restore faces and upscale images using GFPGAN & Real-ESRGAN.")
 
 with st.sidebar:
-    st.header("Quality Controls")
-    upscale = st.selectbox("Upscale factor", [2, 4], index=0)
-    denoise = st.slider("Denoise strength", 0.0, 1.0, 0.5, 0.05)
-    bg_smooth = st.slider("Background smoothing", 0, 30, 10)
-    st.subheader("Tone")
-    brightness = st.slider("Brightness", -50, 50, 0)
-    contrast   = st.slider("Contrast",   -50, 50, 8)
-    saturation = st.slider("Saturation", -30, 30, 6)
+    st.header("Settings")
+    upscale = st.selectbox("Upscale Factor", [2, 4], index=0)
+    denoise = st.slider("Denoise Strength", 0.0, 1.0, 0.3)
+    st.info("Note: Processing takes ~30-60 seconds on CPU.")
 
-uploaded = st.file_uploader("Upload a JPG/PNG", type=["jpg", "jpeg", "png"])
+uploaded_file = st.file_uploader("Upload an image...", type=["jpg", "jpeg", "png"])
 
-if uploaded:
-    orig_pil = Image.open(uploaded).convert("RGB")
-    st.image(orig_pil, caption="Original", use_column_width=True)
+if uploaded_file is not None:
+    # Load Image
+    input_image = Image.open(uploaded_file).convert("RGB")
+    input_np = np.array(input_image)
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.image(input_image, caption="Original Image", use_column_width=True)
 
-    if st.button("Enhance Image"):
-        with st.spinner("Processing... this may take a minute on CPU."):
-            out_np = enhance_image(
-                pil_to_np(orig_pil),
-                upscale=upscale,
-                denoise_strength=denoise,
-                bg_smooth_strength=bg_smooth,
-                tone={"brightness": brightness, "contrast": contrast, "saturation": saturation}
-            )
-
-        out_pil = Image.fromarray(out_np)
-        st.image(out_pil, caption="Enhanced", use_column_width=True)
-
-        buf = io.BytesIO()
-        out_pil.save(buf, format="PNG")
-        st.download_button("⬇️ Download PNG", data=buf.getvalue(), file_name="enhanced.png", mime="image/png")
-else:
-    st.info("Upload an image to start.")
+    if st.button("Magic Enhance ✨"):
+        try:
+            face_enhancer = load_models()
+            with st.spinner("Processing... please wait."):
+                result_np = process_image(input_np, upscale, denoise, face_enhancer)
+                
+                result_pil = Image.fromarray(result_np)
+                with col2:
+                    st.image(result_pil, caption="Enhanced Image", use_column_width=True)
+                
+                # Download Button
+                buf = io.BytesIO()
+                result_pil.save(buf, format="PNG")
+                st.download_button(
+                    label="Download Enhanced Image",
+                    data=buf.getvalue(),
+                    file_name="enhanced_photo.png",
+                    mime="image/png"
+                )
+        except Exception as e:
+            st.error(f"An error occurred: {e}")
+            st.warning("If the app crashed, the image might be too large for the free tier RAM.")
