@@ -1,13 +1,19 @@
-# AI Photo Enhancer (Streamlit)
+# Simple Photo Enhancer
 
-## Local run
-python3.11 -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-streamlit run app.py
+A user-friendly photo enhancement app built with Streamlit.
 
-## Deploy to Streamlit Community Cloud
-- Push to GitHub
-- New app → select repo → main file: `app.py`
-- After first build, if imports fail, use **Manage app → Reboot**.
-- If necessary: **Settings → Advanced → Clear cache**, then Reboot.
+## Features
+- Adjust brightness, contrast, sharpness, and color saturation
+- Apply various filters (sharpen, smooth, edge enhance)
+- Real-time preview
+- Easy download of enhanced images
+
+## Live Demo
+[Click here to try the app](your-streamlit-url-here)
+
+## Local Development
+1. Clone the repository
+2. Create virtual environment:
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
