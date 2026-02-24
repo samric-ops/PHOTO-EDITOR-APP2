@@ -1,6 +1,19 @@
+# Python bytecode
 __pycache__/
-*.pyc
-*.pyo
-*.DS_Store
+*.py[cod]
+*$py.class
+
+# Virtual environments (Mabigat ito, huwag i-upload!)
 .venv/
+venv/
+ENV/
+
+# Environment variables (Sikreto mo dapat ito)
 .env
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Streamlit logs/cache
+.streamlit/static-downloads/
