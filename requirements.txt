@@ -1,12 +1,10 @@
-# Base requirements
 streamlit==1.32.0
 numpy==1.26.4
 Pillow==10.3.0
 opencv-python-headless
 setuptools
+wheel
 future
-
-# AI Libraries (Order matters for build dependencies)
 torch==2.2.2 --extra-index-url https://download.pytorch.org/whl/cpu
 torchvision==0.17.2 --extra-index-url https://download.pytorch.org/whl/cpu
 basicsr==1.4.2
